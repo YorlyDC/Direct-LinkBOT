@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	range_parser "github.com/quantumsheep/range-parser"
@@ -105,26 +106,39 @@ func getStreamRoute(ctx *gin.Context) {
 			CacheSize:  100 * 1024 * 1024, // 100MB cache
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Error("Error creating TelegramReader", zap.Error(err))
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
 		defer lr.Close()
 
 		buf := make([]byte, 32*1024)
 		for {
-			n, err := lr.Read(buf)
-			if err != nil && err != io.EOF {
-				log.Error("Error reading from TelegramReader", zap.Error(err))
+			select {
+			case <-ctx.Request.Context().Done():
+				log.Info("Client closed connection")
 				return
+			default:
+				n, err := lr.Read(buf)
+				if err != nil {
+					if err == io.EOF {
+						return
+					}
+					log.Error("Error reading from TelegramReader", zap.Error(err))
+					return
+				}
+				if n == 0 {
+					continue
+				}
+				_, err = w.Write(buf[:n])
+				if err != nil {
+					if err != http.ErrHandlerTimeout && !strings.Contains(err.Error(), "broken pipe") && !strings.Contains(err.Error(), "connection reset by peer") {
+						log.Error("Error writing to response", zap.Error(err))
+					}
+					return
+				}
+				w.(http.Flusher).Flush()
 			}
-			if n == 0 {
-				break
-			}
-			if _, err := w.Write(buf[:n]); err != nil {
-				log.Error("Error writing to response", zap.Error(err))
-				return
-			}
-			w.(http.Flusher).Flush()
 		}
 	}
 }
