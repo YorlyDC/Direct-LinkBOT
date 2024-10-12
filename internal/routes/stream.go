@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	range_parser "github.com/quantumsheep/range-parser"
 	"go.uber.org/zap"
@@ -98,13 +99,32 @@ func getStreamRoute(ctx *gin.Context) {
 	ctx.Header("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, file.FileName))
 
 	if r.Method != "HEAD" {
+		lr, err := utils.NewTelegramReader(ctx, worker.Client, file.Location, start, end, contentLength, utils.Config{
+			BufferSize: 512 * 1024, // 512KB buffer
+			CacheTTL:   10 * time.Minute,
+			CacheSize:  100 * 1024 * 1024, // 100MB cache
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		lr, _ := utils.NewTelegramReader(ctx, worker.Client, file.Location, start, end, contentLength)
-		if _, err := io.CopyN(w, lr, contentLength); err != nil {
-			log.Error("Error while copying stream", zap.Error(err))
+		defer lr.Close()
+
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := lr.Read(buf)
+			if err != nil && err != io.EOF {
+				log.Error("Error reading from TelegramReader", zap.Error(err))
+				return
+			}
+			if n == 0 {
+				break
+			}
+			if _, err := w.Write(buf[:n]); err != nil {
+				log.Error("Error writing to response", zap.Error(err))
+				return
+			}
+			w.(http.Flusher).Flush()
 		}
 	}
 }
