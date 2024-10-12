@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang/standlib/base64"
+	"encoding/base64"
 )
 
 var log *zap.Logger
