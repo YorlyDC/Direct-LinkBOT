@@ -4,11 +4,34 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
+	"time"
 
 	"github.com/celestix/gotgproto"
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
+	"github.com/coocood/freecache"
 )
+
+const (
+	defaultBufferSize = 512 * 1024  // 512KB default buffer size
+	maxBufferSize     = 1024 * 1024 // 1MB max buffer size
+	defaultCacheTTL   = 10 * time.Minute
+	maxCacheSize      = 100 * 1024 * 1024 // 100MB max cache size
+	maxActiveReaders  = 35
+)
+
+var (
+	cache          *freecache.Cache
+	activeReaders  int
+	readersMutex   sync.Mutex
+)
+
+type Config struct {
+	BufferSize int
+	CacheTTL   time.Duration
+	CacheSize  int
+}
 
 type telegramReader struct {
 	ctx           context.Context
@@ -23,10 +46,8 @@ type telegramReader struct {
 	chunkSize     int64
 	i             int64
 	contentLength int64
-}
-
-func (*telegramReader) Close() error {
-	return nil
+	mu            sync.Mutex
+	config        Config
 }
 
 func NewTelegramReader(
@@ -36,7 +57,29 @@ func NewTelegramReader(
 	start int64,
 	end int64,
 	contentLength int64,
+	config Config,
 ) (io.ReadCloser, error) {
+	readersMutex.Lock()
+	defer readersMutex.Unlock()
+
+	if activeReaders >= maxActiveReaders {
+		return nil, fmt.Errorf("maximum number of active readers reached")
+	}
+	activeReaders++
+
+	if config.BufferSize <= 0 || config.BufferSize > maxBufferSize {
+		config.BufferSize = defaultBufferSize
+	}
+	if config.CacheTTL <= 0 {
+		config.CacheTTL = defaultCacheTTL
+	}
+	if config.CacheSize <= 0 || config.CacheSize > maxCacheSize {
+		config.CacheSize = maxCacheSize
+	}
+
+	if cache == nil || cache.Size() != config.CacheSize {
+		cache = freecache.NewCache(config.CacheSize)
+	}
 
 	r := &telegramReader{
 		ctx:           ctx,
@@ -45,15 +88,20 @@ func NewTelegramReader(
 		client:        client,
 		start:         start,
 		end:           end,
-		chunkSize:     int64(1024 * 1024),
+		chunkSize:     int64(config.BufferSize),
 		contentLength: contentLength,
+		config:        config,
+		buffer:        make([]byte, config.BufferSize),
 	}
-	r.log.Sugar().Debug("Start")
+	r.log.Sugar().Debugf("TelegramReader initialized with BufferSize: %d, CacheTTL: %v, CacheSize: %d", 
+		config.BufferSize, config.CacheTTL, config.CacheSize)
 	r.next = r.partStream()
 	return r, nil
 }
 
 func (r *telegramReader) Read(p []byte) (n int, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if r.bytesread == r.contentLength {
 		r.log.Sugar().Debug("EOF (bytesread == contentLength)")
@@ -72,7 +120,6 @@ func (r *telegramReader) Read(p []byte) (n int, err error) {
 			if err != nil {
 				return 0, err
 			}
-
 		}
 		r.i = 0
 	}
@@ -83,6 +130,11 @@ func (r *telegramReader) Read(p []byte) (n int, err error) {
 }
 
 func (r *telegramReader) chunk(offset int64, limit int64) ([]byte, error) {
+	cacheKey := fmt.Sprintf("%d:%d:%d", r.location.ID, offset, limit)
+	cachedData, err := cache.Get([]byte(cacheKey))
+	if err == nil {
+		return cachedData, nil
+	}
 
 	req := &tg.UploadGetFileRequest{
 		Offset:   offset,
@@ -91,13 +143,13 @@ func (r *telegramReader) chunk(offset int64, limit int64) ([]byte, error) {
 	}
 
 	res, err := r.client.API().UploadGetFile(r.ctx, req)
-
 	if err != nil {
 		return nil, err
 	}
 
 	switch result := res.(type) {
 	case *tg.UploadFile:
+		cache.Set([]byte(cacheKey), result.Bytes, int(r.config.CacheTTL.Seconds()))
 		return result.Bytes, nil
 	default:
 		return nil, fmt.Errorf("unexpected type %T", r)
@@ -105,7 +157,6 @@ func (r *telegramReader) chunk(offset int64, limit int64) ([]byte, error) {
 }
 
 func (r *telegramReader) partStream() func() ([]byte, error) {
-
 	start := r.start
 	end := r.end
 	offset := start - (start % r.chunkSize)
@@ -139,4 +190,11 @@ func (r *telegramReader) partStream() func() ([]byte, error) {
 		return res, nil
 	}
 	return readData
+}
+
+func (r *telegramReader) Close() error {
+	readersMutex.Lock()
+	defer readersMutex.Unlock()
+	activeReaders--
+	return nil
 }
