@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	cache          *freecache.Cache
+	fileCache      *freecache.Cache
 	activeReaders  int
 	readersMutex   sync.Mutex
 )
@@ -77,8 +77,8 @@ func NewTelegramReader(
 		config.CacheSize = maxCacheSize
 	}
 
-	if cache == nil || cache.Size() != config.CacheSize {
-		cache = freecache.NewCache(config.CacheSize)
+	if fileCache == nil {
+		fileCache = freecache.NewCache(config.CacheSize)
 	}
 
 	r := &telegramReader{
@@ -131,7 +131,7 @@ func (r *telegramReader) Read(p []byte) (n int, err error) {
 
 func (r *telegramReader) chunk(offset int64, limit int64) ([]byte, error) {
 	cacheKey := fmt.Sprintf("%d:%d:%d", r.location.ID, offset, limit)
-	cachedData, err := cache.Get([]byte(cacheKey))
+	cachedData, err := fileCache.Get([]byte(cacheKey))
 	if err == nil {
 		return cachedData, nil
 	}
@@ -149,7 +149,7 @@ func (r *telegramReader) chunk(offset int64, limit int64) ([]byte, error) {
 
 	switch result := res.(type) {
 	case *tg.UploadFile:
-		cache.Set([]byte(cacheKey), result.Bytes, int(r.config.CacheTTL.Seconds()))
+		fileCache.Set([]byte(cacheKey), result.Bytes, int(r.config.CacheTTL.Seconds()))
 		return result.Bytes, nil
 	default:
 		return nil, fmt.Errorf("unexpected type %T", r)
