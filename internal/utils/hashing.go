@@ -1,12 +1,15 @@
 package utils
 
 import (
+	"fmt"
+	"encoding/base64"
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/types"
 )
 
 func PackFile(fileName string, fileSize int64, mimeType string, fileID int64) string {
-	return (&types.HashableFileStruct{FileName: fileName, FileSize: fileSize, MimeType: mimeType, FileID: fileID}).Pack()
+	data := fmt.Sprintf("%s|%d|%s|%d", fileName, fileSize, mimeType, fileID)
+	return base64.URLEncoding.EncodeToString([]byte(data))
 }
 
 func GetShortHash(fullHash string) string {
