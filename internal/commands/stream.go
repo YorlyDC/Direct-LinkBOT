@@ -123,8 +123,3 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	}
 	return dispatcher.EndGroups
 }
-
-func PackFile(fileName string, fileSize int64, mimeType string, fileID int64) string {
-	data := fmt.Sprintf("%s|%d|%s|%d", fileName, fileSize, mimeType, fileID)
-	return base64.URLEncoding.EncodeToString([]byte(data))
-}
