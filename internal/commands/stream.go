@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"encoding/base64"
 
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/utils"
@@ -25,17 +26,18 @@ func (m *command) LoadStream(dispatcher dispatcher.Dispatcher) {
 }
 
 func supportedMediaFilter(m *types.Message) (bool, error) {
-	if not := m.Media == nil; not {
+	if m.Media == nil {
 		return false, dispatcher.EndGroups
 	}
 	switch m.Media.(type) {
 	case *tg.MessageMediaDocument:
 		return true, nil
 	case *tg.MessageMediaPhoto:
-		return false, nil
-	case tg.MessageMediaClass:
-		return false, dispatcher.EndGroups
+		return true, nil // Permitir fotos también
+	case *tg.MessageMediaVideo:
+		return true, nil // Permitir videos explícitamente
 	default:
+		log.Sugar().Infof("Unsupported media type: %T", m.Media)
 		return false, nil
 	}
 }
@@ -73,6 +75,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	doc := update.Updates[1].(*tg.UpdateNewChannelMessage).Message.(*tg.Message).Media
 	file, err := utils.FileFromMedia(doc)
 	if err != nil {
+		log.Sugar().Errorf("Error getting file from media: %v", err)
 		ctx.Reply(u, fmt.Sprintf("Error - %s", err.Error()), nil)
 		return dispatcher.EndGroups
 	}
@@ -119,4 +122,9 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		ctx.Reply(u, fmt.Sprintf("Error - %s", err.Error()), nil)
 	}
 	return dispatcher.EndGroups
+}
+
+func PackFile(fileName string, fileSize int64, mimeType string, fileID int64) string {
+	data := fmt.Sprintf("%s|%d|%s|%d", fileName, fileSize, mimeType, fileID)
+	return base64.URLEncoding.EncodeToString([]byte(data))
 }

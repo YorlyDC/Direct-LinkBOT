@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/standlib/base64"
 )
 
 var log *zap.Logger
@@ -60,6 +61,7 @@ func getStreamRoute(ctx *gin.Context) {
 		file.ID,
 	)
 	if !utils.CheckHash(authHash, expectedHash) {
+		log.Error("Invalid hash", zap.String("authHash", authHash), zap.String("expectedHash", expectedHash))
 		http.Error(w, "invalid hash", http.StatusBadRequest)
 		return
 	}
@@ -142,3 +144,9 @@ func getStreamRoute(ctx *gin.Context) {
 		}
 	}
 }
+
+func PackFile(fileName string, fileSize int64, mimeType string, fileID int64) string {
+	data := fmt.Sprintf("%s|%d|%s|%d", fileName, fileSize, mimeType, fileID)
+	return base64.URLEncoding.EncodeToString([]byte(data))
+}
+

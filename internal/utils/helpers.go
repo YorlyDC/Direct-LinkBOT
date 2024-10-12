@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"encoding/base64"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/ext"
@@ -154,4 +155,9 @@ func ForwardMessages(ctx *ext.Context, fromChatId, toChatId int64, messageID int
 		return nil, err
 	}
 	return update.(*tg.Updates), nil
+}
+
+func PackFile(fileName string, fileSize int64, mimeType string, fileID int64) string {
+	data := fmt.Sprintf("%s|%d|%s|%d", fileName, fileSize, mimeType, fileID)
+	return base64.URLEncoding.EncodeToString([]byte(data))
 }
